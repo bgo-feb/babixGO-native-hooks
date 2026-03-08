@@ -112,12 +112,65 @@ bool FindIl2CppPathFromMaps(std::string* out_path) {
     return false;
 }
 
+std::string ExtractMissingLibraryName(const char* dlopen_error) {
+    if (dlopen_error == nullptr) {
+        return {};
+    }
+
+    const char* marker = strstr(dlopen_error, "library \"");
+    if (marker == nullptr) {
+        return {};
+    }
+    marker += strlen("library \"");
+
+    const char* end_quote = strchr(marker, '"');
+    if (end_quote == nullptr || end_quote <= marker) {
+        return {};
+    }
+
+    return std::string(marker, static_cast<size_t>(end_quote - marker));
+}
+
+bool TryLoadSiblingLibrary(const std::string& module_path, const std::string& library_name, int attempt) {
+    if (module_path.empty() || library_name.empty()) {
+        return false;
+    }
+
+    const size_t last_slash = module_path.find_last_of('/');
+    if (last_slash == std::string::npos) {
+        return false;
+    }
+
+    const std::string sibling_path = module_path.substr(0, last_slash + 1) + library_name;
+    void* handle = dlopen(sibling_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (handle == nullptr) {
+        const char* err = dlerror();
+        LOGD(
+            "dependency preload failed (attempt=%d, lib=%s, path=%s, err=%s)",
+            attempt,
+            library_name.c_str(),
+            sibling_path.c_str(),
+            err != nullptr ? err : "<none>");
+        return false;
+    }
+
+    LOGI(
+        "dependency preload succeeded (attempt=%d, lib=%s, path=%s, handle=%p)",
+        attempt,
+        library_name.c_str(),
+        sibling_path.c_str(),
+        handle);
+    return true;
+}
+
 void* ResolveIl2CppSymbol(const char* symbol_name) {
-    void* symbol = DobbySymbolResolver("libil2cpp.so", symbol_name);
+    void* symbol = dlsym(RTLD_DEFAULT, symbol_name);
     if (symbol != nullptr) {
         return symbol;
     }
-    return DobbySymbolResolver(nullptr, symbol_name);
+
+    // Fallback for isolated linker namespaces where RTLD_DEFAULT cannot see app-local exports.
+    return DobbySymbolResolver("libil2cpp.so", symbol_name);
 }
 
 void* Il2CppSymbolFinder(const char* symbol_name, void* user_data) {
@@ -126,9 +179,25 @@ void* Il2CppSymbolFinder(const char* symbol_name, void* user_data) {
 }
 
 bool TryBootstrapViaUsersFinder(int attempt) {
+    if ((attempt % 25) != 1) {
+        return false;
+    }
+
+    std::string full_path;
+    if (!FindIl2CppPathFromMaps(&full_path)) {
+        return false;
+    }
+
+    LOGD("Trying users-finder bootstrap (attempt=%d, il2cpp=%s)", attempt, full_path.c_str());
+
     void* il2cpp_init = ResolveIl2CppSymbol("il2cpp_init");
     void* il2cpp_class_from_type = ResolveIl2CppSymbol("il2cpp_class_from_il2cpp_type");
     if (il2cpp_init == nullptr || il2cpp_class_from_type == nullptr) {
+        LOGD(
+            "users-finder symbols unavailable (attempt=%d, il2cpp_init=%p, il2cpp_class_from_il2cpp_type=%p)",
+            attempt,
+            il2cpp_init,
+            il2cpp_class_from_type);
         return false;
     }
 
@@ -156,6 +225,7 @@ void* TryResolveIl2CppHandle(int attempt) {
         LOGI("libil2cpp.so found on attempt %d: %p", attempt, handle);
         return handle;
     }
+    const char* name_noload_err = dlerror();
 
     // Namespace fallback: a normal dlopen can still succeed when NOLOAD lookups fail.
     handle = dlopen("libil2cpp.so", RTLD_NOW);
@@ -163,20 +233,53 @@ void* TryResolveIl2CppHandle(int attempt) {
         LOGI("libil2cpp.so opened via dlopen on attempt %d: %p", attempt, handle);
         return handle;
     }
+    const char* name_open_err = dlerror();
 
     std::string full_path;
     if (FindIl2CppPathFromMaps(&full_path)) {
         // Prefer NOLOAD to avoid creating duplicate mappings if possible.
         handle = dlopen(full_path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+        const char* path_noload_err = dlerror();
         if (handle == nullptr) {
             // Namespace fallback: open by absolute path.
             handle = dlopen(full_path.c_str(), RTLD_NOW);
+        }
+        const char* path_open_err = dlerror();
+
+        if (handle == nullptr) {
+            std::string missing_dep = ExtractMissingLibraryName(path_open_err);
+            if (missing_dep.empty()) {
+                missing_dep = ExtractMissingLibraryName(name_open_err);
+            }
+
+            if (!missing_dep.empty() && TryLoadSiblingLibrary(full_path, missing_dep, attempt)) {
+                // Retry after dependency preload.
+                handle = dlopen(full_path.c_str(), RTLD_NOW);
+                path_open_err = dlerror();
+            }
         }
 
         if (handle != nullptr) {
             LOGI("libil2cpp.so found via maps on attempt %d: %p (%s)", attempt, handle, full_path.c_str());
             return handle;
         }
+
+        if ((attempt % 100) == 0) {
+            LOGD(
+                "il2cpp mapped but dlopen still failing (attempt=%d, path=%s, noLoadErr=%s, openErr=%s, pathNoLoadErr=%s, pathOpenErr=%s)",
+                attempt,
+                full_path.c_str(),
+                name_noload_err != nullptr ? name_noload_err : "<none>",
+                name_open_err != nullptr ? name_open_err : "<none>",
+                path_noload_err != nullptr ? path_noload_err : "<none>",
+                path_open_err != nullptr ? path_open_err : "<none>");
+        }
+    } else if ((attempt % 100) == 0) {
+        LOGD(
+            "il2cpp not yet in /proc/self/maps (attempt=%d, noLoadErr=%s, openErr=%s)",
+            attempt,
+            name_noload_err != nullptr ? name_noload_err : "<none>",
+            name_open_err != nullptr ? name_open_err : "<none>");
     }
 
     return nullptr;
