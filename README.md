@@ -1,18 +1,23 @@
 # babixGO-native-hooks
 
-Minimal Working Example for a native `libbabix_payload.so` that hooks IL2CPP methods in Monopoly GO without feature logic. The project is intentionally limited to a stable loader path, one diagnostic hook, and deployment helpers.
+Native `libbabix_payload.so` for IL2CPP hooks in Monopoly GO using BNM + Dobby. The project focuses on a stable preload/bootstrap path and direct game-method hooks resolved from `dump.cs`.
 
 ## Scope
 
 - Native payload for `arm64-v8a`
 - BNM-based IL2CPP discovery
 - Dobby-based inline hook installation
-- One low-risk smoke-test hook on `UnityEngine.Debug.Log(object)`
+- Roll hooks on `Tophat.Client.ClientActions` and `Tophat.Client.DiceRoll`
+- Jail hooks on `Tophat.Client.Jail.EscapeJailService`
+- CoinFlip hooks on `Tophat.Client.ForeverGames.CoinFlip.CoinFlipService`
+- Pickup hooks on `Tophat.Client.BoardPickups` and `Tophat.Common.Rolling.PickupHandler`
+- Chance hook on `Tophat.Common.Rolling.CardHandler.DrawCard`
+- Speed hooks on `UnityEngine.Time.get/set_timeScale`
 - Magisk-style persistent preload plus a faster direct test script
 
 Not included:
 
-- Roll/jail/speed feature hooks
+- Memory hooks into `libmys_payload.so`
 - IPC / socket feed
 - Pattern scanning
 - Late ptrace injection support
@@ -30,7 +35,13 @@ babixGO-native-hooks/
 │   ├── hook_manager.cpp
 │   ├── hook_manager.h
 │   ├── hooks/
-│   │   └── roll_hook.cpp
+│   │   ├── hook_utils.cpp
+│   │   ├── roll_hook.cpp
+│   │   ├── jail_hook.cpp
+│   │   ├── coinflip_hook.cpp
+│   │   ├── pickups_hook.cpp
+│   │   ├── chance_hook.cpp
+│   │   └── speed_hook.cpp
 │   ├── config/
 │   │   └── BNM/
 │   │       └── UserSettings/
@@ -101,17 +112,28 @@ The payload does not try to hook from the constructor directly.
 
 That keeps the constructor minimal and avoids blocking the process during library load.
 
-## Smoke Test
+## Installed Hooks
 
-The default diagnostic hook is:
+- `Tophat.Client.ClientActions.TophatClientActionsFlusher.Update()`
+- `Tophat.Client.DiceRoll.RollService.AttemptRoll()`
+- `Tophat.Client.DiceRoll.RollService.SetMultiplier(int)`
+- `Tophat.Client.DiceRoll.RollService.GetCurrentMultiplier(bool)`
+- `Tophat.Client.Jail.EscapeJailService.BeginRoll()`
+- `Tophat.Client.Jail.EscapeJailService.SetState(EscapeJailState)`
+- `Tophat.Client.Jail.EscapeJailService.OnRollButtonPressed()`
+- `Tophat.Client.ForeverGames.CoinFlip.CoinFlipService.TryFlip()`
+- `Tophat.Client.ForeverGames.CoinFlip.CoinFlipService.ChangeAnimationState(CoinFlipAnimationState)`
+- `Tophat.Client.ForeverGames.CoinFlip.CoinFlipService.GetMaxFlips()`
+- `Tophat.Client.BoardPickups.BoardPickupsService.EvaluateBoardPickups(bool,bool)`
+- `Tophat.Client.BoardPickups.BoardPickupsService.CheckForPickupsAwaitingSpawn(int)`
+- `Tophat.Client.BoardPickups.BoardPickupsService.SetNextMoveTokenAnimatorParams(int,IEnumerable<...>)`
+- `Tophat.Client.BoardPickups.PickupSources.SpecialCurrencyEventPickupSource.OnLandHandler(IClientPickup)`
+- `Tophat.Common.Rolling.PickupHandler.ProcessPickups(...)`
+- `Tophat.Common.Rolling.CardHandler.DrawCard(MovementContext, IClientActionExecutionContext)`
+- `UnityEngine.Time.set_timeScale(float)`
+- `UnityEngine.Time.get_timeScale()`
 
-- `UnityEngine.Debug.Log(object)` from `UnityEngine.CoreModule.dll`
-
-Hook behavior:
-
-- calls the original first
-- logs string messages with `[Unity]` prefix
-- avoids heavy work for non-string payloads
+Current hook behavior is intentionally read-only/log-centric (calls original function and logs signal/state). It does not patch `libmys_payload.so` globals.
 
 Run the direct smoke test:
 
@@ -140,4 +162,4 @@ For persistent preload:
 
 - The MWE assumes early preload. It is not designed for arbitrary late injection.
 - `UNITY_VER` is pinned to `222` in the generated BNM config. If Monopoly GO changes Unity major/minor, update `jni/config/BNM/UserSettings/GlobalSettings.hpp`.
-- The diagnostic hook proves loader stability, not gameplay offsets.
+- Hooks currently log/observe method traffic and parameters. Feature state extraction and IPC publishing are still a separate step.

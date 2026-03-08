@@ -1,9 +1,6 @@
 #include "hook_manager.h"
 
-#include <BNM/BasicMonoStructures.hpp>
-#include <BNM/Class.hpp>
 #include <BNM/Loading.hpp>
-#include <BNM/MethodBase.hpp>
 #include <BNM/Utils.hpp>
 #include <android/log.h>
 #include <dlfcn.h>
@@ -13,7 +10,13 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <string_view>
+
+#include "hooks/chance_hook.h"
+#include "hooks/coinflip_hook.h"
+#include "hooks/jail_hook.h"
+#include "hooks/pickups_hook.h"
+#include "hooks/roll_hook.h"
+#include "hooks/speed_hook.h"
 
 #define LOG_TAG "HookManager"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -24,22 +27,12 @@ namespace {
 
 constexpr int kIl2CppWaitAttempts = 600;
 constexpr useconds_t kIl2CppWaitSleepUs = 100000;
-constexpr int kImageWaitAttempts = 100;
-constexpr useconds_t kImageWaitSleepUs = 200000;
 constexpr unsigned int kGameWarmupSeconds = 3;
 
 std::atomic<bool> g_bnm_bootstrap_started{false};
 std::atomic<bool> g_bnm_loaded_callback_seen{false};
 std::atomic<bool> g_install_thread_started{false};
 std::atomic<bool> g_hooks_installed{false};
-
-using DebugLogFn = void (*)(BNM::IL2CPP::Il2CppObject* message, BNM::IL2CPP::MethodInfo* method);
-
-namespace Originals {
-DebugLogFn DebugLog = nullptr;
-}
-
-BNM::IL2CPP::Il2CppClass* g_system_string_class = nullptr;
 
 void* WaitForIl2CppHandle() {
     for (int attempt = 1; attempt <= kIl2CppWaitAttempts; ++attempt) {
@@ -53,40 +46,6 @@ void* WaitForIl2CppHandle() {
 
     return nullptr;
 }
-
-BNM::Image WaitForImage(std::string_view image_name) {
-    for (int attempt = 1; attempt <= kImageWaitAttempts; ++attempt) {
-        BNM::Image image(image_name);
-        if (image.IsValid()) {
-            LOGD("Image %.*s found on attempt %d", static_cast<int>(image_name.size()), image_name.data(), attempt);
-            return image;
-        }
-        usleep(kImageWaitSleepUs);
-    }
-
-    return {};
-}
-
-void HookedDebugLog(BNM::IL2CPP::Il2CppObject* message, BNM::IL2CPP::MethodInfo* method) {
-    if (Originals::DebugLog != nullptr) {
-        Originals::DebugLog(message, method);
-    }
-
-    if (message == nullptr || g_system_string_class == nullptr || message->klass != g_system_string_class) {
-        return;
-    }
-
-    auto* text = reinterpret_cast<BNM::Structures::Mono::String*>(message);
-    if (text->length <= 0) {
-        return;
-    }
-
-    const std::string utf8 = text->str();
-    if (!utf8.empty()) {
-        LOGD("[Unity] %s", utf8.c_str());
-    }
-}
-
 }  // namespace
 
 bool HookManager::InitializeBNM() {
@@ -168,51 +127,28 @@ bool HookManager::InstallHooks() {
 
     LOGI("Installing hooks...");
 
-    if (!InstallUnityDebugLogHook()) {
+    const bool roll_ok = Hooks::Roll::Install();
+    const bool jail_ok = Hooks::Jail::Install();
+    const bool coinflip_ok = Hooks::CoinFlip::Install();
+    const bool pickups_ok = Hooks::Pickups::Install();
+    const bool chance_ok = Hooks::Chance::Install();
+    const bool speed_ok = Hooks::Speed::Install();
+
+    if (!(roll_ok && jail_ok && coinflip_ok && pickups_ok && chance_ok && speed_ok)) {
+        LOGE(
+            "Hook install summary: roll=%d jail=%d coinflip=%d pickups=%d chance=%d speed=%d",
+            roll_ok ? 1 : 0,
+            jail_ok ? 1 : 0,
+            coinflip_ok ? 1 : 0,
+            pickups_ok ? 1 : 0,
+            chance_ok ? 1 : 0,
+            speed_ok ? 1 : 0);
         return false;
     }
 
     g_hooks_installed.store(true);
+    LOGI("Hook install summary: roll=1 jail=1 coinflip=1 pickups=1 chance=1 speed=1");
     return true;
-}
-
-bool HookManager::InstallUnityDebugLogHook() {
-    BNM::Image unity_core = WaitForImage("UnityEngine.CoreModule.dll");
-    if (!unity_core.IsValid()) {
-        LOGE("UnityEngine.CoreModule.dll not found");
-        return false;
-    }
-
-    BNM::Class debug_class("UnityEngine", "Debug", unity_core);
-    if (!debug_class.IsValid()) {
-        LOGE("UnityEngine.Debug class not found");
-        return false;
-    }
-
-    BNM::Class string_class("System", "String");
-    if (string_class.IsValid()) {
-        g_system_string_class = string_class.GetClass();
-    } else {
-        LOGD("System.String class not found; string payload logging disabled");
-    }
-
-    BNM::MethodBase log_method = debug_class.GetMethod("Log", 1);
-    if (!log_method.IsValid()) {
-        LOGE("UnityEngine.Debug.Log(1) not found");
-        return false;
-    }
-
-    void* target = reinterpret_cast<void*>(log_method.GetOffset());
-    if (target == nullptr) {
-        LOGE("UnityEngine.Debug.Log target address is null");
-        return false;
-    }
-
-    return SafeHook(
-        target,
-        reinterpret_cast<void*>(&HookedDebugLog),
-        reinterpret_cast<void**>(&Originals::DebugLog),
-        "UnityEngine.Debug.Log(object)");
 }
 
 bool HookManager::SafeHook(void* target, void* hook, void** original, const char* name) {
@@ -242,4 +178,3 @@ bool HookManager::SafeHook(void* target, void* hook, void** original, const char
     LOGI("Hook installed: %s (original=%p)", name, *original);
     return true;
 }
-

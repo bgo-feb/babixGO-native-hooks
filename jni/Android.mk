@@ -90,7 +90,14 @@ LOCAL_CPPFLAGS += -std=c++20
 LOCAL_CPP_FEATURES := exceptions rtti
 LOCAL_SRC_FILES := \
     main.cpp \
-    hook_manager.cpp
+    hook_manager.cpp \
+    hooks/hook_utils.cpp \
+    hooks/roll_hook.cpp \
+    hooks/jail_hook.cpp \
+    hooks/coinflip_hook.cpp \
+    hooks/pickups_hook.cpp \
+    hooks/chance_hook.cpp \
+    hooks/speed_hook.cpp
 LOCAL_C_INCLUDES := \
     $(LOCAL_PATH)/generated/BNM/include \
     $(LOCAL_PATH)/external/BNM/external/include \

@@ -34,5 +34,4 @@ echo "[test] launching ${PACKAGE}"
 "${ADB}" shell monkey -p "${PACKAGE}" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
 
 echo "[test] tailing logcat"
-exec "${ADB}" logcat -v time -s BabixPayload:D HookManager:D BabixBNM:D *:E
-
+exec "${ADB}" logcat -v time -s BabixPayload:D HookManager:D HookResolver:D RollHooks:D JailHooks:D CoinFlipHooks:D PickupHooks:D ChanceHooks:D SpeedHooks:D BabixBNM:D *:E

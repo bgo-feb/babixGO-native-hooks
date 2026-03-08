@@ -10,6 +10,4 @@ private:
     static void OnBNMLoaded();
     static void StartInstallThread();
     static void* InstallThreadMain(void*);
-    static bool InstallUnityDebugLogHook();
 };
-
