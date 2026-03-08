@@ -133,8 +133,7 @@ That keeps the constructor minimal and avoids blocking the process during librar
 - `UnityEngine.Time.set_timeScale(float)`
 - `UnityEngine.Time.get_timeScale()`
 
-Current hook behavior is intentionally read-only/log-centric (calls original function and logs signal/state). It does not patch `libmys_payload.so` globals.
-
+Current hook behavior is intentionally read-only/log-centric (calls original function and logs signal/state).
 Run the direct smoke test:
 
 ```bash
