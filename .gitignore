@@ -5,7 +5,7 @@
 /obj/
 /out/
 /jni/generated/BNM/include/
+/jni/generated/Dobby/
 /jni/external/Dobby/prebuilt/
 __pycache__/
 *.pyc
-

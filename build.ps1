@@ -28,33 +28,6 @@ function Resolve-NdkRoot {
     throw "Unable to resolve Android NDK root. Set ANDROID_NDK_ROOT or ANDROID_NDK_HOME."
 }
 
-function Resolve-SdkBinary {
-    param(
-        [string]$CommandName,
-        [string]$RelativeSdkPath
-    )
-
-    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    if ($SdkRoot) {
-        $candidate = Join-Path $SdkRoot $RelativeSdkPath
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-
-        $glob = Join-Path $SdkRoot "cmake\*\bin\$CommandName.exe"
-        $latest = Get-ChildItem $glob -ErrorAction SilentlyContinue | Sort-Object FullName | Select-Object -Last 1
-        if ($latest) {
-            return $latest.FullName
-        }
-    }
-
-    throw "Missing required tool: $CommandName"
-}
-
 function Resolve-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         return @("py", "-3")
@@ -64,10 +37,6 @@ function Resolve-Python {
     }
     throw "Missing required command: python"
 }
-
-$Cmake = Resolve-SdkBinary -CommandName "cmake" -RelativeSdkPath "cmake\3.22.1\bin\cmake.exe"
-$Ninja = Resolve-SdkBinary -CommandName "ninja" -RelativeSdkPath "cmake\3.22.1\bin\ninja.exe"
-$env:Path = "$(Split-Path $Ninja -Parent);$env:Path"
 
 $NdkRoot = Resolve-NdkRoot
 $NdBuild = Join-Path $NdkRoot "ndk-build.cmd"
@@ -87,32 +56,6 @@ if ($Python.Count -gt 1) {
     & $Python[0] "$RepoRoot\scripts\prepare_bnm_headers.py"
 }
 
-$DobbyBuildDir = Join-Path $RepoRoot "out\dobby\android-arm64"
-$DobbyPrebuiltDir = Join-Path $RepoRoot "jni\external\Dobby\prebuilt\arm64-v8a"
-
-Write-Host "[build] configuring Dobby"
-& $Cmake `
-    -S "$RepoRoot\jni\external\Dobby" `
-    -B $DobbyBuildDir `
-    -G Ninja `
-    -DCMAKE_BUILD_TYPE=Release `
-    -DCMAKE_TOOLCHAIN_FILE="$NdkRoot\build\cmake\android.toolchain.cmake" `
-    -DANDROID_ABI=arm64-v8a `
-    -DANDROID_PLATFORM=26 `
-    -DANDROID_STL=c++_static `
-    -DDOBBY_DEBUG=OFF `
-    "-DPlugin.SymbolResolver=OFF" `
-    "-DPlugin.ImportTableReplace=OFF" `
-    "-DPlugin.Android.BionicLinkerUtil=OFF" `
-    -DDOBBY_BUILD_EXAMPLE=OFF `
-    -DDOBBY_BUILD_TEST=OFF
-
-Write-Host "[build] building Dobby static library"
-& $Cmake --build $DobbyBuildDir --target dobby_static --parallel
-
-New-Item -ItemType Directory -Force -Path $DobbyPrebuiltDir | Out-Null
-Copy-Item (Join-Path $DobbyBuildDir "libdobby.a") (Join-Path $DobbyPrebuiltDir "libdobby.a") -Force
-
 if (Test-Path (Join-Path $RepoRoot "libs")) {
     Remove-Item (Join-Path $RepoRoot "libs") -Recurse -Force
 }
@@ -126,6 +69,9 @@ Write-Host "[build] building payload with ndk-build"
     "NDK_PROJECT_PATH=$RepoRoot" `
     "NDK_APPLICATION_MK=$RepoRoot\jni\Application.mk" `
     "-j$([Environment]::ProcessorCount)"
+
+$LibsDir = Join-Path $RepoRoot "libs"
+New-Item -ItemType File -Force -Path (Join-Path $LibsDir ".gitkeep") | Out-Null
 
 $ModuleLibDir = Join-Path $RepoRoot "module\system\lib64"
 New-Item -ItemType Directory -Force -Path $ModuleLibDir | Out-Null

@@ -54,20 +54,18 @@ babixGO-native-hooks/
 
 ## Why The Build Looks Like This
 
-`BNM` expects a project-specific `GlobalSettings.hpp` and does not ship a ready-to-use `ndk-build` integration for `Dobby`. To keep the upstream submodules clean:
+`BNM` expects a project-specific `GlobalSettings.hpp`. To keep the upstream submodules clean:
 
 1. `scripts/prepare_bnm_headers.py` copies `jni/external/BNM/include` into `jni/generated/BNM/include`
 2. the copied `GlobalSettings.hpp` is replaced with the project-local Dobby-enabled version
-3. `build.ps1` / `build.sh` build `Dobby` once with CMake and copy `libdobby.a` into `jni/external/Dobby/prebuilt/arm64-v8a/`
-4. `ndk-build` links the final shared object against that prebuilt archive
+3. `ndk-build` builds `Dobby` directly from source with the C++ closure-trampoline path enabled
+4. the final shared object links `BNM` and `Dobby` in one pass
 
-This avoids leaving either submodule dirty after checkout.
+This avoids leaving either submodule dirty after checkout and avoids the ARM64 assembler issues that Dobby can hit on newer NDKs.
 
 ## Requirements
 
 - Android NDK r25+ with `ndk-build`
-- CMake
-- Ninja
 - Python 3
 - `adb`
 - Rooted target device if you want to use the direct wrap-based smoke test
@@ -143,4 +141,3 @@ For persistent preload:
 - The MWE assumes early preload. It is not designed for arbitrary late injection.
 - `UNITY_VER` is pinned to `222` in the generated BNM config. If Monopoly GO changes Unity major/minor, update `jni/config/BNM/UserSettings/GlobalSettings.hpp`.
 - The diagnostic hook proves loader stability, not gameplay offsets.
-
