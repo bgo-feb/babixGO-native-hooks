@@ -13,7 +13,7 @@ Native `libbabix_payload.so` for IL2CPP hooks in Monopoly GO using BNM + Dobby. 
 - Pickup hooks on `Tophat.Client.BoardPickups` and `Tophat.Common.Rolling.PickupHandler`
 - Chance hook on `Tophat.Common.Rolling.CardHandler.DrawCard`
 - Speed hooks on `UnityEngine.Time.get/set_timeScale`
-- Magisk-style persistent preload plus a faster direct test script
+- Zygisk-based loader module for process-targeted payload injection
 
 Not included:
 
@@ -35,6 +35,8 @@ babixGO-native-hooks/
 │   ├── ipc_feed.h
 │   ├── pattern_scanner.cpp
 │   ├── pattern_scanner.h
+│   ├── zygisk.hpp
+│   ├── zygisk_loader.cpp
 │   ├── hooks/
 │   │   ├── hook_utils.cpp
 │   │   ├── roll_hook.cpp
@@ -55,6 +57,7 @@ babixGO-native-hooks/
 ├── module/
 │   ├── module.prop
 │   ├── post-fs-data.sh
+│   ├── zygisk/
 │   └── system/
 │       └── lib64/
 ├── scripts/
@@ -80,7 +83,7 @@ This avoids leaving either submodule dirty after checkout and avoids the ARM64 a
 - Android NDK r25+ with `ndk-build`
 - Python 3
 - `adb`
-- Rooted target device if you want to use the direct wrap-based smoke test
+- Rooted target device with Magisk + Zygisk enabled
 
 ## Build
 
@@ -99,7 +102,9 @@ POSIX shell:
 Successful builds produce:
 
 - `libs/arm64-v8a/libbabix_payload.so`
+- `libs/arm64-v8a/libbabix_zygisk.so`
 - `module/system/lib64/libbabix_payload.so`
+- `module/zygisk/arm64-v8a.so`
 
 ## Runtime Model
 
@@ -135,7 +140,7 @@ That keeps the constructor minimal and avoids blocking the process during librar
 - `UnityEngine.Time.get_timeScale()`
 
 Current hook behavior is intentionally read-only/log-centric (calls original function and logs signal/state).
-Run the direct smoke test:
+Run the module smoke test:
 
 ```bash
 ./test/install.sh
@@ -143,20 +148,20 @@ Run the direct smoke test:
 
 That script:
 
-- pushes the built payload to `/data/local/tmp/libbabix_payload.so`
-- sets `wrap.com.scopely.monopolygo=LD_PRELOAD=/data/local/tmp/libbabix_payload.so`
-- restarts Monopoly GO
+- stages the module into `/data/adb/modules_update/babix_native_hooks`
+- reboots the device so Magisk activates the module
+- launches Monopoly GO
 - tails `logcat`
 
 ## Magisk Module
 
-For persistent preload:
+For persistent Zygisk loading:
 
 1. copy the built `libbabix_payload.so` into `module/system/lib64/`
-2. install the `module/` directory as a Magisk module
-3. reboot or rerun `post-fs-data.sh`
+2. copy the built `libbabix_zygisk.so` to `module/zygisk/arm64-v8a.so`
+3. install the module and reboot
 
-`post-fs-data.sh` sets the `wrap.` property at boot. It does not wait for the game PID because that would be too late for `LD_PRELOAD`.
+`post-fs-data.sh` now only clears stale `wrap.` properties from older module versions.
 
 ## Known Limits
 

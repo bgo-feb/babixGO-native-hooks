@@ -77,4 +77,8 @@ $ModuleLibDir = Join-Path $RepoRoot "module\system\lib64"
 New-Item -ItemType Directory -Force -Path $ModuleLibDir | Out-Null
 Copy-Item (Join-Path $RepoRoot "libs\arm64-v8a\libbabix_payload.so") (Join-Path $ModuleLibDir "libbabix_payload.so") -Force
 
+$ModuleZygiskDir = Join-Path $RepoRoot "module\zygisk"
+New-Item -ItemType Directory -Force -Path $ModuleZygiskDir | Out-Null
+Copy-Item (Join-Path $RepoRoot "libs\arm64-v8a\libbabix_zygisk.so") (Join-Path $ModuleZygiskDir "arm64-v8a.so") -Force
+
 Write-Host "[build] done: $RepoRoot\libs\arm64-v8a\libbabix_payload.so"

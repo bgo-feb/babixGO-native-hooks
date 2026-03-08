@@ -67,5 +67,7 @@ echo "[build] building payload with ndk-build"
 : > "${ROOT_DIR}/libs/.gitkeep"
 mkdir -p "${ROOT_DIR}/module/system/lib64"
 cp "${ROOT_DIR}/libs/arm64-v8a/libbabix_payload.so" "${ROOT_DIR}/module/system/lib64/libbabix_payload.so"
+mkdir -p "${ROOT_DIR}/module/zygisk"
+cp "${ROOT_DIR}/libs/arm64-v8a/libbabix_zygisk.so" "${ROOT_DIR}/module/zygisk/arm64-v8a.so"
 
 echo "[build] done: ${ROOT_DIR}/libs/arm64-v8a/libbabix_payload.so"

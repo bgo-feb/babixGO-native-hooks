@@ -1,20 +1,14 @@
 #!/system/bin/sh
 
 PACKAGE="com.scopely.monopolygo"
-PAYLOAD="/system/lib64/libbabix_payload.so"
 PROP="wrap.$PACKAGE"
-VALUE="LD_PRELOAD=$PAYLOAD"
 
-if [ ! -f "$PAYLOAD" ]; then
-  log -t BabixHooks "payload missing: $PAYLOAD"
-  exit 0
-fi
-
+# Zygisk loader is now responsible for loading libbabix_payload.so.
+# Clear any stale wrap property from older module versions.
 if command -v resetprop >/dev/null 2>&1; then
-  resetprop -n "$PROP" "$VALUE"
+  resetprop -n "$PROP" ""
 else
-  setprop "$PROP" "$VALUE"
+  setprop "$PROP" ""
 fi
 
-log -t BabixHooks "configured $PROP=$VALUE"
-
+log -t BabixHooks "zygisk mode active; cleared $PROP"

@@ -110,3 +110,10 @@ LOCAL_C_INCLUDES := \
 LOCAL_STATIC_LIBRARIES := bnm dobby
 LOCAL_LDLIBS := -llog -ldl
 include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := babix_zygisk
+LOCAL_CPPFLAGS += -std=c++20
+LOCAL_SRC_FILES := zygisk_loader.cpp
+LOCAL_LDLIBS := -llog -ldl
+include $(BUILD_SHARED_LIBRARY)
