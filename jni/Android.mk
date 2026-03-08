@@ -91,6 +91,8 @@ LOCAL_CPP_FEATURES := exceptions rtti
 LOCAL_SRC_FILES := \
     main.cpp \
     hook_manager.cpp \
+    ipc_feed.cpp \
+    pattern_scanner.cpp \
     hooks/hook_utils.cpp \
     hooks/roll_hook.cpp \
     hooks/jail_hook.cpp \

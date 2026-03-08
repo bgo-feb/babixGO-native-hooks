@@ -17,6 +17,8 @@
 #include "hooks/pickups_hook.h"
 #include "hooks/roll_hook.h"
 #include "hooks/speed_hook.h"
+#include "ipc_feed.h"
+#include "pattern_scanner.h"
 
 #define LOG_TAG "HookManager"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -33,6 +35,41 @@ std::atomic<bool> g_bnm_bootstrap_started{false};
 std::atomic<bool> g_bnm_loaded_callback_seen{false};
 std::atomic<bool> g_install_thread_started{false};
 std::atomic<bool> g_hooks_installed{false};
+std::atomic<bool> g_late_fallback_started{false};
+
+constexpr int kLateFallbackAttempts = 50;
+constexpr useconds_t kLateFallbackSleepUs = 100000;
+
+void* LateInjectionFallbackMain(void*) {
+    prctl(PR_SET_NAME, "babix-latefix", 0, 0, 0);
+
+    for (int i = 0; i < kLateFallbackAttempts; ++i) {
+        if (g_bnm_loaded_callback_seen.load()) {
+            return nullptr;
+        }
+        usleep(kLateFallbackSleepUs);
+    }
+
+    LOGI("BNM callback timeout; enabling late-injection fallback install path");
+    IPCFeed::Publish("late_injection_fallback");
+    HookManager::StartInstallThread();
+    return nullptr;
+}
+
+void StartLateInjectionFallbackThread() {
+    if (g_late_fallback_started.exchange(true)) {
+        return;
+    }
+
+    pthread_t thread = {};
+    const int rc = pthread_create(&thread, nullptr, &LateInjectionFallbackMain, nullptr);
+    if (rc != 0) {
+        LOGE("Failed to create late fallback thread: %d", rc);
+        g_late_fallback_started.store(false);
+        return;
+    }
+    pthread_detach(thread);
+}
 
 void* WaitForIl2CppHandle() {
     for (int attempt = 1; attempt <= kIl2CppWaitAttempts; ++attempt) {
@@ -70,6 +107,13 @@ bool HookManager::InitializeBNM() {
     }
 
     LOGI("BNM bootstrap armed");
+    IPCFeed::Publish("bnm_bootstrap_armed");
+
+    static const uint8_t kIl2CppElfMagic[] = {0x7F, 0x45, 0x4C, 0x46};
+    void* elf_signature = PatternScanner::FindFirstInModule("libil2cpp.so", kIl2CppElfMagic, "xxxx", sizeof(kIl2CppElfMagic));
+    LOGD("Pattern scanner probe (ELF magic) => %p", elf_signature);
+
+    StartLateInjectionFallbackThread();
     return true;
 }
 
@@ -80,6 +124,7 @@ void HookManager::OnBNMLoaded() {
     }
 
     LOGI("BNM reported IL2CPP ready");
+    IPCFeed::Publish("bnm_ready");
     StartInstallThread();
 }
 
@@ -126,6 +171,7 @@ bool HookManager::InstallHooks() {
     }
 
     LOGI("Installing hooks...");
+    IPCFeed::Publish("hook_install_start");
 
     const bool roll_ok = Hooks::Roll::Install();
     const bool jail_ok = Hooks::Jail::Install();
@@ -148,6 +194,7 @@ bool HookManager::InstallHooks() {
 
     g_hooks_installed.store(true);
     LOGI("Hook install summary: roll=1 jail=1 coinflip=1 pickups=1 chance=1 speed=1");
+    IPCFeed::Publish("hook_install_success");
     return true;
 }
 
