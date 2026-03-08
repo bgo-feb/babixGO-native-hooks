@@ -8,6 +8,10 @@ public:
 
 private:
     static void OnBNMLoaded();
+
+public:
     static void StartInstallThread();
+
+private:
     static void* InstallThreadMain(void*);
 };

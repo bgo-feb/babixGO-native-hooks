@@ -18,9 +18,6 @@ Native `libbabix_payload.so` for IL2CPP hooks in Monopoly GO using BNM + Dobby. 
 Not included:
 
 - Memory hooks into `libmys_payload.so`
-- IPC / socket feed
-- Pattern scanning
-- Late ptrace injection support
 
 ## Repository Layout
 
@@ -34,6 +31,10 @@ babixGO-native-hooks/
 │   ├── main.cpp
 │   ├── hook_manager.cpp
 │   ├── hook_manager.h
+│   ├── ipc_feed.cpp
+│   ├── ipc_feed.h
+│   ├── pattern_scanner.cpp
+│   ├── pattern_scanner.h
 │   ├── hooks/
 │   │   ├── hook_utils.cpp
 │   │   ├── roll_hook.cpp
@@ -161,4 +162,6 @@ For persistent preload:
 
 - The MWE assumes early preload. It is not designed for arbitrary late injection.
 - `UNITY_VER` is pinned to `222` in the generated BNM config. If Monopoly GO changes Unity major/minor, update `jni/config/BNM/UserSettings/GlobalSettings.hpp`.
-- Hooks currently log/observe method traffic and parameters. Feature state extraction and IPC publishing are still a separate step.
+- IPC feed is best-effort and defaults to the abstract UNIX datagram socket `@babix_native_hooks` (override via `BABIX_IPC_SOCKET`).
+- Pattern scanning currently provides utility-level probes and fallback diagnostics, not full signature databases.
+- Late ptrace-style injection now has a fallback path that starts hook installation if BNM callback timing is missed.

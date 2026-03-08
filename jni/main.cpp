@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "hook_manager.h"
+#include "ipc_feed.h"
 
 #define LOG_TAG "BabixPayload"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -30,6 +31,8 @@ __attribute__((constructor))
 static void OnLibraryLoad() {
     LOGI("=== Babix Payload Loaded ===");
     LOGI("PID: %d", getpid());
+    IPCFeed::Initialize();
+    IPCFeed::Publish("payload_loaded");
 
     pthread_t thread = {};
     const int rc = pthread_create(&thread, nullptr, &BootstrapThreadMain, nullptr);
