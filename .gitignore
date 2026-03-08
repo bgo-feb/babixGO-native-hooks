@@ -1,0 +1,11 @@
+/libs/*
+!/libs/.gitkeep
+/module/system/lib64/*
+!/module/system/lib64/.gitkeep
+/obj/
+/out/
+/jni/generated/BNM/include/
+/jni/external/Dobby/prebuilt/
+__pycache__/
+*.pyc
+

@@ -1,0 +1,7 @@
+id=babix_native_hooks
+name=Babix Native Hooks
+version=0.1.0
+versionCode=1
+author=babix234
+description=Minimal IL2CPP hook bootstrap for Monopoly GO
+
