@@ -1,0 +1,6 @@
+[submodule "jni/external/BNM"]
+	path = jni/external/BNM
+	url = https://github.com/ByNameModding/BNM-Android.git
+[submodule "jni/external/Dobby"]
+	path = jni/external/Dobby
+	url = https://github.com/jmpews/Dobby.git
