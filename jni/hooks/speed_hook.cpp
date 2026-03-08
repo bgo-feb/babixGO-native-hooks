@@ -28,16 +28,34 @@ std::atomic<uint64_t> g_set_time_scale_calls{0};
 std::atomic<uint64_t> g_get_time_scale_calls{0};
 std::atomic<uint32_t> g_last_set_bits{std::bit_cast<uint32_t>(1.0f)};
 
+// Speed modification settings
+std::atomic<uint32_t> g_speed_multiplier_bits{std::bit_cast<uint32_t>(2.0f)};
+std::atomic<bool> g_speed_modification_enabled{true};
+
 void HookedSetTimeScale(float value) {
     const uint64_t call_count = g_set_time_scale_calls.fetch_add(1, std::memory_order_relaxed) + 1;
     const float last_value = std::bit_cast<float>(g_last_set_bits.exchange(std::bit_cast<uint32_t>(value)));
 
+    float modified_value = value;
+    if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
+        const float multiplier = std::bit_cast<float>(g_speed_multiplier_bits.load(std::memory_order_relaxed));
+        modified_value = value * multiplier;
+        
+        // Clamp to reasonable range
+        if (modified_value < 0.0f) modified_value = 0.0f;
+        if (modified_value > 10.0f) modified_value = 10.0f;
+    }
+
     if (call_count <= 20 || (call_count % 120) == 0 || (value < 0.99f || value > 1.01f) || (last_value != value)) {
-        LOGD("Time.set_timeScale(%0.3f) call=%" PRIu64, value, call_count);
+        if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
+            LOGD("Time.set_timeScale(%0.3f -> %0.3f) call=%" PRIu64, value, modified_value, call_count);
+        } else {
+            LOGD("Time.set_timeScale(%0.3f) call=%" PRIu64, value, call_count);
+        }
     }
 
     if (Originals::SetTimeScale != nullptr) {
-        Originals::SetTimeScale(value);
+        Originals::SetTimeScale(modified_value);
     }
 }
 
@@ -48,10 +66,24 @@ float HookedGetTimeScale() {
         value = Originals::GetTimeScale();
     }
 
-    if ((call_count % 240) == 1) {
-        LOGD("Time.get_timeScale() -> %0.3f call=%" PRIu64, value, call_count);
+    float modified_value = value;
+    if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
+        const float multiplier = std::bit_cast<float>(g_speed_multiplier_bits.load(std::memory_order_relaxed));
+        modified_value = value * multiplier;
+        
+        // Clamp to reasonable range
+        if (modified_value < 0.0f) modified_value = 0.0f;
+        if (modified_value > 10.0f) modified_value = 10.0f;
     }
-    return value;
+
+    if ((call_count % 240) == 1) {
+        if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
+            LOGD("Time.get_timeScale() -> %0.3f (modified: %0.3f) call=%" PRIu64, value, modified_value, call_count);
+        } else {
+            LOGD("Time.get_timeScale() -> %0.3f call=%" PRIu64, value, call_count);
+        }
+    }
+    return modified_value;
 }
 
 }  // namespace
@@ -86,7 +118,26 @@ bool Hooks::Speed::Install() {
         return false;
     }
 
-    LOGI("Speed hooks installed");
+    const float multiplier = std::bit_cast<float>(g_speed_multiplier_bits.load(std::memory_order_relaxed));
+    LOGI("Speed hooks installed (multiplier: %.1fx, enabled: %s)", multiplier, 
+         g_speed_modification_enabled.load(std::memory_order_relaxed) ? "true" : "false");
     return true;
 }
 
+void Hooks::Speed::SetSpeedMultiplier(float multiplier) {
+    g_speed_multiplier_bits.store(std::bit_cast<uint32_t>(multiplier), std::memory_order_relaxed);
+    LOGI("Speed multiplier set to %.2fx", multiplier);
+}
+
+float Hooks::Speed::GetSpeedMultiplier() {
+    return std::bit_cast<float>(g_speed_multiplier_bits.load(std::memory_order_relaxed));
+}
+
+void Hooks::Speed::EnableSpeedModification(bool enabled) {
+    g_speed_modification_enabled.store(enabled, std::memory_order_relaxed);
+    LOGI("Speed modification %s", enabled ? "enabled" : "disabled");
+}
+
+bool Hooks::Speed::IsSpeedModificationEnabled() {
+    return g_speed_modification_enabled.load(std::memory_order_relaxed);
+}
