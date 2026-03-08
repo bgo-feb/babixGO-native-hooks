@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <inttypes.h>
+#include <mutex>
 
 #include "hook_utils.h"
 
@@ -32,6 +33,10 @@ std::atomic<uint64_t> g_attempt_roll_calls{0};
 std::atomic<uint64_t> g_set_multiplier_calls{0};
 std::atomic<uint64_t> g_get_multiplier_calls{0};
 
+// Store the RollService instance for external triggering
+std::mutex g_roll_service_mutex;
+void* g_roll_service_instance = nullptr;
+
 void HookedTophatClientActionsFlusherUpdate(void* thiz) {
     const uint64_t call_count = g_flusher_update_calls.fetch_add(1, std::memory_order_relaxed) + 1;
     if ((call_count % 300) == 1) {
@@ -44,7 +49,14 @@ void HookedTophatClientActionsFlusherUpdate(void* thiz) {
 
 void HookedRollServiceAttemptRoll(void* thiz) {
     const uint64_t call_count = g_attempt_roll_calls.fetch_add(1, std::memory_order_relaxed) + 1;
-    LOGI("RollService.AttemptRoll hit #%" PRIu64, call_count);
+    
+    // Store the RollService instance for external use
+    if (thiz != nullptr) {
+        std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+        g_roll_service_instance = thiz;
+    }
+    
+    LOGI("RollService.AttemptRoll hit #%" PRIu64 " (instance: %p)", call_count, thiz);
     if (Originals::AttemptRoll != nullptr) {
         Originals::AttemptRoll(thiz);
     }
@@ -52,7 +64,14 @@ void HookedRollServiceAttemptRoll(void* thiz) {
 
 void HookedRollServiceSetMultiplier(void* thiz, int multiplier) {
     const uint64_t call_count = g_set_multiplier_calls.fetch_add(1, std::memory_order_relaxed) + 1;
-    LOGD("RollService.SetMultiplier(%d) hit #%" PRIu64, multiplier, call_count);
+    
+    // Store the RollService instance
+    if (thiz != nullptr) {
+        std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+        g_roll_service_instance = thiz;
+    }
+    
+    LOGD("RollService.SetMultiplier(%d) hit #%" PRIu64 " (instance: %p)", multiplier, call_count, thiz);
     if (Originals::SetMultiplier != nullptr) {
         Originals::SetMultiplier(thiz, multiplier);
     }
@@ -60,6 +79,13 @@ void HookedRollServiceSetMultiplier(void* thiz, int multiplier) {
 
 int HookedRollServiceGetCurrentMultiplier(void* thiz, bool check_multiplier) {
     const uint64_t call_count = g_get_multiplier_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    
+    // Store the RollService instance
+    if (thiz != nullptr) {
+        std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+        g_roll_service_instance = thiz;
+    }
+    
     int value = 0;
     if (Originals::GetCurrentMultiplier != nullptr) {
         value = Originals::GetCurrentMultiplier(thiz, check_multiplier);
@@ -130,4 +156,45 @@ bool Hooks::Roll::Install() {
 
     LOGI("Roll hooks installed");
     return true;
+}
+
+bool Hooks::Roll::TriggerRoll(int multiplier) {
+    std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+    
+    if (g_roll_service_instance == nullptr) {
+        LOGE("TriggerRoll failed: No RollService instance available");
+        return false;
+    }
+    
+    if (Originals::SetMultiplier == nullptr || Originals::AttemptRoll == nullptr) {
+        LOGE("TriggerRoll failed: Hooks not installed");
+        return false;
+    }
+    
+    // Validate multiplier
+    if (multiplier < 1 || multiplier > 100) {
+        LOGE("TriggerRoll failed: Invalid multiplier %d (valid: 1-100)", multiplier);
+        return false;
+    }
+    
+    LOGI("TriggerRoll: Setting multiplier to %d and attempting roll", multiplier);
+    
+    // Set multiplier first
+    Originals::SetMultiplier(g_roll_service_instance, multiplier);
+    
+    // Then attempt the roll
+    Originals::AttemptRoll(g_roll_service_instance);
+    
+    return true;
+}
+
+void Hooks::Roll::SetRollServiceInstance(void* instance) {
+    std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+    g_roll_service_instance = instance;
+    LOGD("RollService instance manually set to %p", instance);
+}
+
+void* Hooks::Roll::GetRollServiceInstance() {
+    std::lock_guard<std::mutex> lock(g_roll_service_mutex);
+    return g_roll_service_instance;
 }
