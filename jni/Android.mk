@@ -38,6 +38,7 @@ LOCAL_SRC_FILES := \
     generated/Dobby/source/Backend/UserMode/UnifiedInterface/platform-posix.cc \
     generated/Dobby/source/Backend/UserMode/ExecMemory/code-patch-tool-posix.cc \
     generated/Dobby/source/Backend/UserMode/ExecMemory/clear-cache-tool-all.c \
+    generated/Dobby/builtin-plugin/SymbolResolver/elf/dobby_symbol_resolver.cc \
     generated/Dobby/external/logging/logging.cc \
     generated/Dobby/source/dobby.cpp
 LOCAL_C_INCLUDES := \

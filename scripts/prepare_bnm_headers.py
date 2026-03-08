@@ -43,6 +43,9 @@ def main() -> int:
     process_runtime = (
         dst_dobby / "source" / "Backend" / "UserMode" / "PlatformUtil" / "Linux" / "ProcessRuntime.cc"
     )
+    symbol_resolver = (
+        dst_dobby / "builtin-plugin" / "SymbolResolver" / "elf" / "dobby_symbol_resolver.cc"
+    )
     code_patch_tool = (
         dst_dobby / "source" / "Backend" / "UserMode" / "ExecMemory" / "code-patch-tool-posix.cc"
     )
@@ -97,6 +100,10 @@ def main() -> int:
     )
     process_runtime_text = process_runtime_text.replace("module.load_address", "module.base")
     process_runtime.write_text(process_runtime_text, encoding="utf-8")
+
+    symbol_resolver_text = symbol_resolver.read_text(encoding="utf-8")
+    symbol_resolver_text = symbol_resolver_text.replace("module.load_address", "module.base")
+    symbol_resolver.write_text(symbol_resolver_text, encoding="utf-8")
 
     code_patch_tool.write_text(
         code_patch_tool.read_text(encoding="utf-8").replace(

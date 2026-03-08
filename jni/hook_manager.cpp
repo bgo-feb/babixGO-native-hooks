@@ -3,6 +3,8 @@
 #include <BNM/Loading.hpp>
 #include <BNM/Utils.hpp>
 #include <android/log.h>
+#include <cstdio>
+#include <cstring>
 #include <dlfcn.h>
 #include <dobby.h>
 #include <pthread.h>
@@ -10,6 +12,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <string>
 
 #include "hooks/chance_hook.h"
 #include "hooks/coinflip_hook.h"
@@ -27,7 +30,6 @@
 
 namespace {
 
-constexpr int kIl2CppWaitAttempts = 600;
 constexpr useconds_t kIl2CppWaitSleepUs = 100000;
 constexpr unsigned int kGameWarmupSeconds = 3;
 
@@ -36,6 +38,7 @@ std::atomic<bool> g_bnm_loaded_callback_seen{false};
 std::atomic<bool> g_install_thread_started{false};
 std::atomic<bool> g_hooks_installed{false};
 std::atomic<bool> g_late_fallback_started{false};
+std::atomic<bool> g_users_finder_fail_logged{false};
 
 constexpr int kLateFallbackAttempts = 50;
 constexpr useconds_t kLateFallbackSleepUs = 100000;
@@ -71,14 +74,109 @@ void StartLateInjectionFallbackThread() {
     pthread_detach(thread);
 }
 
-void* WaitForIl2CppHandle() {
-    for (int attempt = 1; attempt <= kIl2CppWaitAttempts; ++attempt) {
-        void* handle = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
+bool FindIl2CppPathFromMaps(std::string* out_path) {
+    if (out_path == nullptr) {
+        return false;
+    }
+
+    FILE* fp = fopen("/proc/self/maps", "r");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    char line[1024] = {};
+    while (fgets(line, sizeof(line), fp) != nullptr) {
+        if (strstr(line, "libil2cpp.so") == nullptr) {
+            continue;
+        }
+
+        const char* path_start = strchr(line, '/');
+        if (path_start == nullptr) {
+            continue;
+        }
+
+        std::string path(path_start);
+        while (!path.empty() &&
+               (path.back() == '\n' || path.back() == '\r' || path.back() == ' ' || path.back() == '\t')) {
+            path.pop_back();
+        }
+
+        if (!path.empty()) {
+            *out_path = path;
+            fclose(fp);
+            return true;
+        }
+    }
+
+    fclose(fp);
+    return false;
+}
+
+void* ResolveIl2CppSymbol(const char* symbol_name) {
+    void* symbol = DobbySymbolResolver("libil2cpp.so", symbol_name);
+    if (symbol != nullptr) {
+        return symbol;
+    }
+    return DobbySymbolResolver(nullptr, symbol_name);
+}
+
+void* Il2CppSymbolFinder(const char* symbol_name, void* user_data) {
+    (void)user_data;
+    return ResolveIl2CppSymbol(symbol_name);
+}
+
+bool TryBootstrapViaUsersFinder(int attempt) {
+    void* il2cpp_init = ResolveIl2CppSymbol("il2cpp_init");
+    void* il2cpp_class_from_type = ResolveIl2CppSymbol("il2cpp_class_from_il2cpp_type");
+    if (il2cpp_init == nullptr || il2cpp_class_from_type == nullptr) {
+        return false;
+    }
+
+    LOGI(
+        "libil2cpp symbols visible on attempt %d: il2cpp_init=%p, il2cpp_class_from_il2cpp_type=%p",
+        attempt,
+        il2cpp_init,
+        il2cpp_class_from_type);
+
+    BNM::Loading::SetMethodFinder(&Il2CppSymbolFinder, nullptr);
+    if (!BNM::Loading::TryLoadByUsersFinder()) {
+        if (!g_users_finder_fail_logged.exchange(true)) {
+            LOGE("BNM::Loading::TryLoadByUsersFinder failed despite visible il2cpp symbols");
+        }
+        return false;
+    }
+
+    LOGI("BNM bootstrap armed via users finder");
+    return true;
+}
+
+void* TryResolveIl2CppHandle(int attempt) {
+    void* handle = dlopen("libil2cpp.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle != nullptr) {
+        LOGI("libil2cpp.so found on attempt %d: %p", attempt, handle);
+        return handle;
+    }
+
+    // Namespace fallback: a normal dlopen can still succeed when NOLOAD lookups fail.
+    handle = dlopen("libil2cpp.so", RTLD_NOW);
+    if (handle != nullptr) {
+        LOGI("libil2cpp.so opened via dlopen on attempt %d: %p", attempt, handle);
+        return handle;
+    }
+
+    std::string full_path;
+    if (FindIl2CppPathFromMaps(&full_path)) {
+        // Prefer NOLOAD to avoid creating duplicate mappings if possible.
+        handle = dlopen(full_path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+        if (handle == nullptr) {
+            // Namespace fallback: open by absolute path.
+            handle = dlopen(full_path.c_str(), RTLD_NOW);
+        }
+
         if (handle != nullptr) {
-            LOGI("libil2cpp.so found on attempt %d: %p", attempt, handle);
+            LOGI("libil2cpp.so found via maps on attempt %d: %p (%s)", attempt, handle, full_path.c_str());
             return handle;
         }
-        usleep(kIl2CppWaitSleepUs);
     }
 
     return nullptr;
@@ -91,19 +189,31 @@ bool HookManager::InitializeBNM() {
         return true;
     }
 
-    LOGI("Waiting for libil2cpp.so...");
-    void* il2cpp_handle = WaitForIl2CppHandle();
-    if (il2cpp_handle == nullptr) {
-        LOGE("FATAL: libil2cpp.so not found after %d attempts", kIl2CppWaitAttempts);
-        return false;
-    }
-
+    LOGI("Waiting for libil2cpp bootstrap preconditions...");
     BNM::Loading::AllowLateInitHook();
     BNM::Loading::AddOnLoadedEvent(&HookManager::OnBNMLoaded);
 
-    if (!BNM::Loading::TryLoadByDlfcnHandle(il2cpp_handle)) {
-        LOGE("FATAL: BNM::Loading::TryLoadByDlfcnHandle failed");
-        return false;
+    int attempt = 0;
+    while (true) {
+        ++attempt;
+
+        if (TryBootstrapViaUsersFinder(attempt)) {
+            break;
+        }
+
+        void* il2cpp_handle = TryResolveIl2CppHandle(attempt);
+        if (il2cpp_handle != nullptr) {
+            if (BNM::Loading::TryLoadByDlfcnHandle(il2cpp_handle)) {
+                LOGI("BNM bootstrap armed via dlfcn handle");
+                break;
+            }
+            LOGE("BNM::Loading::TryLoadByDlfcnHandle failed with handle %p", il2cpp_handle);
+        }
+
+        if ((attempt % 100) == 0) {
+            LOGD("Still waiting for libil2cpp bootstrap preconditions (attempt=%d)", attempt);
+        }
+        usleep(kIl2CppWaitSleepUs);
     }
 
     LOGI("BNM bootstrap armed");
