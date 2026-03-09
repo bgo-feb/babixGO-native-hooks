@@ -66,24 +66,25 @@ float HookedGetTimeScale() {
         value = Originals::GetTimeScale();
     }
 
-    float modified_value = value;
+    // The stored timeScale is already (original_input * multiplier) because set_timeScale applied
+    // the multiplier when it was set. To return a value consistent with what the caller originally
+    // passed to set_timeScale, we divide by the multiplier here.
+    float reported_value = value;
     if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
         const float multiplier = std::bit_cast<float>(g_speed_multiplier_bits.load(std::memory_order_relaxed));
-        modified_value = value * multiplier;
-        
-        // Clamp to reasonable range
-        if (modified_value < 0.0f) modified_value = 0.0f;
-        if (modified_value > 10.0f) modified_value = 10.0f;
+        if (multiplier > 0.0001f) {
+            reported_value = value / multiplier;
+        }
     }
 
     if ((call_count % 240) == 1) {
         if (g_speed_modification_enabled.load(std::memory_order_relaxed)) {
-            LOGD("Time.get_timeScale() -> %0.3f (modified: %0.3f) call=%" PRIu64, value, modified_value, call_count);
+            LOGD("Time.get_timeScale() stored=%0.3f reported=%0.3f call=%" PRIu64, value, reported_value, call_count);
         } else {
             LOGD("Time.get_timeScale() -> %0.3f call=%" PRIu64, value, call_count);
         }
     }
-    return modified_value;
+    return reported_value;
 }
 
 }  // namespace

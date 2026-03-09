@@ -383,6 +383,9 @@ bool HookManager::InstallHooks() {
         return true;
     }
 
+    // Mark as attempted immediately so no second thread can enter even if we return false below.
+    g_hooks_installed.store(true);
+
     LOGI("Installing hooks...");
     IPCFeed::Publish("hook_install_start");
 
@@ -393,20 +396,23 @@ bool HookManager::InstallHooks() {
     const bool chance_ok = Hooks::Chance::Install();
     const bool speed_ok = Hooks::Speed::Install();
 
-    if (!(roll_ok && jail_ok && coinflip_ok && pickups_ok && chance_ok && speed_ok)) {
-        LOGE(
-            "Hook install summary: roll=%d jail=%d coinflip=%d pickups=%d chance=%d speed=%d",
-            roll_ok ? 1 : 0,
-            jail_ok ? 1 : 0,
-            coinflip_ok ? 1 : 0,
-            pickups_ok ? 1 : 0,
-            chance_ok ? 1 : 0,
-            speed_ok ? 1 : 0);
+    const bool all_ok = roll_ok && jail_ok && coinflip_ok && pickups_ok && chance_ok && speed_ok;
+    LOGI(
+        "Hook install summary: roll=%d jail=%d coinflip=%d pickups=%d chance=%d speed=%d",
+        roll_ok ? 1 : 0,
+        jail_ok ? 1 : 0,
+        coinflip_ok ? 1 : 0,
+        pickups_ok ? 1 : 0,
+        chance_ok ? 1 : 0,
+        speed_ok ? 1 : 0);
+
+    if (!all_ok) {
+        LOGE("Hook installation incomplete – see per-module logs above");
+        IPCFeed::Publish("hook_install_partial");
         return false;
     }
 
-    g_hooks_installed.store(true);
-    LOGI("Hook install summary: roll=1 jail=1 coinflip=1 pickups=1 chance=1 speed=1");
+    LOGI("All hooks installed successfully");
     IPCFeed::Publish("hook_install_success");
     return true;
 }
