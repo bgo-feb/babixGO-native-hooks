@@ -297,3 +297,196 @@ class IL2CPPMemoryReader:
             logger.warning("Failed to close mem file descriptor %s: %s", self.mem_file, exc)
         finally:
             self.mem_file = None
+
+
+class MysRollServiceDiscovery:
+    """Discover the live RollService pointer via libmys_payload.so globals.
+
+    libmys_payload.so hooks ``RollService::ToggleMultiplier`` (IL2CPP offset
+    ``0x40493E8``) and captures the ``self`` pointer on first call:
+
+    .. code-block:: cpp
+
+        extern "C" void hooked_ToggleMultiplier(void* self) {
+            if (self != nullptr && g_rollServiceInstance == nullptr)
+                g_rollServiceInstance = self;   // <-- what we read
+            ...
+        }
+
+    Pointer chain (offsets from dump.cs):
+        ``libmys[g_rollServiceInstance]``  →  ``RollService*``
+        ``RollService* + 0x10``            →  ``RollModel*``   (serverModel field)
+        ``RollModel*   + 0x18``            →  ``int32``        (DicekBackingField)
+
+    Prerequisites:
+        - ``libmys_payload.so`` must be injected and active.
+        - The user must have tapped the multiplier button at least once so that
+          ``hooked_ToggleMultiplier`` has stored ``g_rollServiceInstance``.
+    """
+
+    # Offsets from dump.cs (verified against v1.63.1 Mono dump)
+    _ROLLSERVICE_TO_SERVERMODEL: int = 0x10   # RollService::serverModel
+    _ROLLMODEL_TO_DICE: int = 0x18            # RollModel::DicekBackingField (int32)
+
+    # Scan boundaries for g_rollServiceInstance inside libmys data segment
+    _SCAN_RANGE: int = 0x100000   # 1 MB – covers .data + .bss comfortably
+    _SCAN_STEP: int = 8           # pointer-aligned scan
+
+    # Sanity bounds for a plausible dice count
+    _DICE_MIN: int = 0
+    _DICE_MAX: int = 9999
+
+    MYS_LIB_NAME: str = "libmys_payload.so"
+
+    def __init__(self, pid: int, mem_file: int) -> None:
+        """
+        Args:
+            pid: PID of the Monopoly GO process.
+            mem_file: Open file descriptor for ``/proc/<pid>/mem``.
+        """
+        self._pid = pid
+        self._mem_file = mem_file
+        self._mys_base: Optional[int] = self._get_mys_base()
+        self._g_rollservice_addr: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @property
+    def available(self) -> bool:
+        """True when libmys_payload.so is loaded in the target process."""
+        return self._mys_base is not None
+
+    def get_dice_count(self) -> Optional[int]:
+        """Return the current dice count via the mys pointer chain.
+
+        Returns:
+            Dice count, or ``None`` on any error.  Call ``last_error`` to get
+            a human-readable explanation when ``None`` is returned.
+        """
+        if not self.available:
+            logger.warning(
+                "MysRollServiceDiscovery: %s not found in /proc/%s/maps.",
+                self.MYS_LIB_NAME,
+                self._pid,
+            )
+            return None
+
+        if self._g_rollservice_addr is None:
+            self._g_rollservice_addr = self._scan_for_g_rollservice()
+
+        if self._g_rollservice_addr is None:
+            logger.warning(
+                "MysRollServiceDiscovery: g_rollServiceInstance not found. "
+                "Has the user tapped the multiplier button at least once?"
+            )
+            return None
+
+        return self._read_dice_via_chain(self._g_rollservice_addr)
+
+    def invalidate_cache(self) -> None:
+        """Force re-scan for g_rollServiceInstance on next call."""
+        self._g_rollservice_addr = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_mys_base(self) -> Optional[int]:
+        """Return the base address of libmys_payload.so, or None."""
+        maps_path = f"/proc/{self._pid}/maps"
+        try:
+            with open(maps_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if self.MYS_LIB_NAME in line:
+                        start = line.split("-", maxsplit=1)[0]
+                        base = int(start, 16)
+                        logger.debug(
+                            "MysRollServiceDiscovery: %s base = 0x%x",
+                            self.MYS_LIB_NAME,
+                            base,
+                        )
+                        return base
+        except OSError as exc:
+            logger.error("MysRollServiceDiscovery: cannot read maps: %s", exc)
+        return None
+
+    def _read_ptr(self, addr: int) -> Optional[int]:
+        """Read a 64-bit pointer from an absolute address."""
+        try:
+            os.lseek(self._mem_file, addr, os.SEEK_SET)
+            data = os.read(self._mem_file, 8)
+            if len(data) != 8:
+                return None
+            value = struct.unpack("<Q", data)[0]
+            return value if value != 0 else None
+        except OSError:
+            return None
+
+    def _read_int32(self, addr: int) -> Optional[int]:
+        """Read a signed 32-bit integer from an absolute address."""
+        try:
+            os.lseek(self._mem_file, addr, os.SEEK_SET)
+            data = os.read(self._mem_file, 4)
+            if len(data) != 4:
+                return None
+            return struct.unpack("<i", data)[0]
+        except OSError:
+            return None
+
+    def _is_plausible_dice(self, value: int) -> bool:
+        return self._DICE_MIN <= value <= self._DICE_MAX
+
+    def _scan_for_g_rollservice(self) -> Optional[int]:
+        """Scan libmys_payload.so data segment for g_rollServiceInstance.
+
+        Validates each candidate by following the full pointer chain and
+        checking whether the resulting dice count is plausible.
+
+        Returns:
+            Absolute address of g_rollServiceInstance, or None.
+        """
+        assert self._mys_base is not None
+        logger.debug("MysRollServiceDiscovery: scanning for g_rollServiceInstance …")
+
+        for offset in range(0, self._SCAN_RANGE, self._SCAN_STEP):
+            candidate_addr = self._mys_base + offset
+            dice = self._read_dice_via_chain(candidate_addr)
+            if dice is not None:
+                logger.info(
+                    "MysRollServiceDiscovery: g_rollServiceInstance found at "
+                    "libmys+0x%x (abs 0x%x), dice=%d",
+                    offset,
+                    candidate_addr,
+                    dice,
+                )
+                return candidate_addr
+
+        return None
+
+    def _read_dice_via_chain(self, g_ptr_addr: int) -> Optional[int]:
+        """Follow the pointer chain from a g_rollServiceInstance candidate.
+
+        Chain:
+            ``*g_ptr_addr``                    →  RollService*
+            ``*(RollService* + 0x10)``         →  RollModel*
+            ``*(RollModel*   + 0x18)`` (i32)   →  dice count
+
+        Returns:
+            Dice count if the full chain resolves to a plausible value,
+            otherwise None.
+        """
+        service_ptr = self._read_ptr(g_ptr_addr)
+        if service_ptr is None:
+            return None
+
+        model_ptr = self._read_ptr(service_ptr + self._ROLLSERVICE_TO_SERVERMODEL)
+        if model_ptr is None:
+            return None
+
+        dice = self._read_int32(model_ptr + self._ROLLMODEL_TO_DICE)
+        if dice is None:
+            return None
+
+        return dice if self._is_plausible_dice(dice) else None
