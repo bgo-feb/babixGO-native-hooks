@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "CoinFlipHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -81,6 +82,7 @@ const char* ToAnimationStateName(int state) {
 
 void HookedTryFlip(void* thiz) {
     const uint64_t call_count = g_try_flip_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    IPCFeed::Publish("coinflip:try_flip");
     LOGI("CoinFlipService.TryFlip self=%p call=%" PRIu64, thiz, call_count);
     if (Originals::TryFlip != nullptr) {
         Originals::TryFlip(thiz);
@@ -89,6 +91,12 @@ void HookedTryFlip(void* thiz) {
 
 void HookedChangeAnimationState(void* thiz, int state) {
     const uint64_t call_count = g_change_animation_state_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Flipping=3, ResolveFlip=4, Rewarding=5, Unlucky=9, Success=10
+    if (state == 3 || state == 4 || state == 5 || state == 9 || state == 10) {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "coinflip:anim=%s", ToAnimationStateName(state));
+        IPCFeed::Publish(ipc_msg);
+    }
     LOGD(
         "CoinFlipService.ChangeAnimationState state=%d(%s) self=%p call=%" PRIu64,
         state,

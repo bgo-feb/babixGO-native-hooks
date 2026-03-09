@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "RollHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -56,6 +57,7 @@ void HookedRollServiceAttemptRoll(void* thiz) {
         g_roll_service_instance = thiz;
     }
     
+    IPCFeed::Publish("roll:attempt");
     LOGI("RollService.AttemptRoll hit #%" PRIu64 " (instance: %p)", call_count, thiz);
     if (Originals::AttemptRoll != nullptr) {
         Originals::AttemptRoll(thiz);
@@ -71,6 +73,11 @@ void HookedRollServiceSetMultiplier(void* thiz, int multiplier) {
         g_roll_service_instance = thiz;
     }
     
+    {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "roll:mult=%d", multiplier);
+        IPCFeed::Publish(ipc_msg);
+    }
     LOGD("RollService.SetMultiplier(%d) hit #%" PRIu64 " (instance: %p)", multiplier, call_count, thiz);
     if (Originals::SetMultiplier != nullptr) {
         Originals::SetMultiplier(thiz, multiplier);

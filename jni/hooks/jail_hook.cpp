@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "JailHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -67,6 +68,7 @@ void* HookedBeginRoll(void* thiz) {
         result = Originals::BeginRoll(thiz);
     }
 
+    IPCFeed::Publish("jail:begin_roll");
     LOGI(
         "EscapeJailService.BeginRoll self=%p result=%p call=%" PRIu64,
         thiz,
@@ -87,6 +89,7 @@ void HookedOnSingleRollComplete(void* thiz) {
 
 void HookedOnRollButtonPressed(void* thiz) {
     const uint64_t call_count = g_on_roll_button_pressed_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    IPCFeed::Publish("jail:roll_btn");
     LOGI("EscapeJailService.OnRollButtonPressed self=%p call=%" PRIu64, thiz, call_count);
     if (Originals::OnRollButtonPressed != nullptr) {
         Originals::OnRollButtonPressed(thiz);
@@ -95,6 +98,11 @@ void HookedOnRollButtonPressed(void* thiz) {
 
 void HookedSetState(void* thiz, int state) {
     const uint64_t call_count = g_set_state_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "jail:state=%d(%s)", state, ToStateName(state));
+        IPCFeed::Publish(ipc_msg);
+    }
     LOGI(
         "EscapeJailService.SetState state=%d(%s) self=%p call=%" PRIu64,
         state,

@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "PickupHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -164,6 +165,11 @@ void* HookedTriggerOnLandHandler(void* thiz, int tile_index) {
         tile_index,
         thiz,
         call_count);
+    {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "pickup:land:tile=%d", tile_index);
+        IPCFeed::Publish(ipc_msg);
+    }
     if (Originals::TriggerOnLandHandler == nullptr) {
         return nullptr;
     }
@@ -371,6 +377,12 @@ void* HookedPickupHandlerAwardPickupContents(void* pickup, int multiplier, void*
             multiplier,
             ledger_entry_type,
             call_count);
+    }
+    {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "pickup:award:type=%s,tile=%d,mult=%d",
+            PickupTypeName(type), tile_index, multiplier);
+        IPCFeed::Publish(ipc_msg);
     }
     if (Originals::AwardPickupContents == nullptr) {
         return nullptr;

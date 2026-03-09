@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "ChanceHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -25,6 +26,7 @@ std::atomic<uint64_t> g_draw_card_calls{0};
 
 void* HookedCardHandlerDrawCard(void* movement_context, void* execution_context) {
     const uint64_t call_count = g_draw_card_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    IPCFeed::Publish("chance:draw_card");
     LOGD("CardHandler.DrawCard hit #%" PRIu64, call_count);
 
     if (Originals::DrawCard == nullptr) {

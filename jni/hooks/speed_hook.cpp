@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "hook_utils.h"
+#include "../ipc_feed.h"
 
 #define LOG_TAG "SpeedHooks"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -52,6 +53,12 @@ void HookedSetTimeScale(float value) {
         } else {
             LOGD("Time.set_timeScale(%0.3f) call=%" PRIu64, value, call_count);
         }
+    }
+
+    if (last_value != value) {
+        char ipc_msg[64];
+        snprintf(ipc_msg, sizeof(ipc_msg), "speed:scale=%.3f->%.3f", value, modified_value);
+        IPCFeed::Publish(ipc_msg);
     }
 
     if (Originals::SetTimeScale != nullptr) {

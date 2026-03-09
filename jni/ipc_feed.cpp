@@ -1,16 +1,16 @@
 #include "ipc_feed.h"
 
 #include <android/log.h>
-#include <fcntl.h>
-#include <cstddef>
+#include <arpa/inet.h>
 #include <cstdlib>
+#include <cstring>
+#include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
 #include <atomic>
-#include <cstring>
 #include <mutex>
+#include <string>
 
 #define LOG_TAG "IPCFeed"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -18,56 +18,48 @@
 
 namespace {
 
-constexpr const char* kSocketEnv = "BABIX_IPC_SOCKET";
-constexpr const char* kDefaultSocketName = "babix_native_hooks";
-constexpr size_t kMaxPayload = 512;
+// TCP-Port, auf dem der Empfaenger (Python/APK) lauscht.
+// Ueberschreibbar per Umgebungsvariable BABIX_IPC_PORT.
+// Ueber `adb reverse tcp:27182 tcp:27182` wird der Port auf den Host-PC weitergeleitet.
+constexpr uint16_t kDefaultPort = 27182;
+constexpr const char* kPortEnv  = "BABIX_IPC_PORT";
+constexpr size_t kMaxPayload    = 512;
 
 std::atomic<bool> g_initialized{false};
 std::mutex g_socket_mutex;
 int g_socket_fd = -1;
 
-void EnsureSocketConnectedLocked() {
+void EnsureConnectedLocked() {
     if (g_socket_fd >= 0) {
         return;
     }
 
-    g_socket_fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    uint16_t port = kDefaultPort;
+    const char* port_env = getenv(kPortEnv);
+    if (port_env != nullptr && port_env[0] != '\0') {
+        const long v = strtol(port_env, nullptr, 10);
+        if (v > 0 && v <= 65535) {
+            port = static_cast<uint16_t>(v);
+        }
+    }
+
+    g_socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (g_socket_fd < 0) {
-        LOGW("socket(AF_UNIX) failed");
+        LOGW("socket(AF_INET) failed");
         return;
     }
 
-    sockaddr_un addr = {};
-    addr.sun_family = AF_UNIX;
+    sockaddr_in addr = {};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 127.0.0.1
 
-    const char* socket_name = getenv(kSocketEnv);
-    if (socket_name == nullptr || socket_name[0] == '\0') {
-        socket_name = kDefaultSocketName;
-    }
-
-    const bool is_abstract = socket_name[0] != '/';
-    const size_t name_len = strlen(socket_name);
-    if (name_len + (is_abstract ? 1 : 0) >= sizeof(addr.sun_path)) {
-        LOGW("socket path too long; disabling IPC feed");
+    if (connect(g_socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        LOGW("connect(127.0.0.1:%u) failed; IPC feed inactive", port);
         close(g_socket_fd);
         g_socket_fd = -1;
-        return;
-    }
-
-    socklen_t addr_len = 0;
-    if (is_abstract) {
-        addr.sun_path[0] = '\0';
-        memcpy(addr.sun_path + 1, socket_name, name_len);
-        addr_len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name_len);
     } else {
-        memcpy(addr.sun_path, socket_name, name_len + 1);
-        addr_len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + name_len + 1);
-    }
-
-    if (connect(g_socket_fd, reinterpret_cast<sockaddr*>(&addr), addr_len) != 0) {
-        LOGW("connect(%s) failed; feed will stay best-effort", is_abstract ? "@babix_native_hooks" : socket_name);
-        close(g_socket_fd);
-        g_socket_fd = -1;
+        LOGD("IPC feed connected to 127.0.0.1:%u", port);
     }
 }
 
@@ -78,8 +70,7 @@ void IPCFeed::Initialize() {
         return;
     }
     std::scoped_lock lock(g_socket_mutex);
-    EnsureSocketConnectedLocked();
-    LOGD("IPC feed initialized");
+    EnsureConnectedLocked();
 }
 
 void IPCFeed::Publish(const std::string& message) {
@@ -91,15 +82,20 @@ void IPCFeed::Publish(const std::string& message) {
         return;
     }
 
+    // Newline-Terminierung fuer einfaches readline() auf der Empfaengerseite
+    const std::string line = (message.size() < kMaxPayload)
+        ? message + '\n'
+        : message.substr(0, kMaxPayload) + '\n';
+
     std::scoped_lock lock(g_socket_mutex);
-    EnsureSocketConnectedLocked();
+    EnsureConnectedLocked();
     if (g_socket_fd < 0) {
         return;
     }
 
-    const size_t send_len = message.size() > kMaxPayload ? kMaxPayload : message.size();
-    const ssize_t rc = send(g_socket_fd, message.data(), send_len, MSG_DONTWAIT | MSG_NOSIGNAL);
+    const ssize_t rc = send(g_socket_fd, line.data(), line.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
     if (rc < 0) {
+        LOGW("send failed; socket closed for reconnect on next Publish");
         close(g_socket_fd);
         g_socket_fd = -1;
     }
